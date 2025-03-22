@@ -9,6 +9,8 @@ import {
 } from "../services/sdp";
 import { connectSocket, disconnectSocket, socket } from "../services/socket";
 import { GetMeetingID } from "../services/meeting";
+import { store } from "../store/store";
+import { setEphermeralToken } from "../features/rtcSlice";
 
 const MeetingPage: React.FC = () => {
   const navigate = useNavigate();
@@ -20,11 +22,33 @@ const MeetingPage: React.FC = () => {
 
   const videoRef = useRef<HTMLVideoElement>(null);
 
+  const initializeConnection = async (meetingId: string) => {
+    const response: any = await GetMeetingID(meetingId);
+    const data = JSON.parse(response.meetingRoom);
+
+    console.log("Meeting data:", data, "Host in browser:", hostNameInBrowser);
+    setHost(data.name);
+
+    if (data.name === hostNameInBrowser && !offer) {
+      createOffer(meetingId);
+    }
+  };
+
+  const createEphermeralToken = async () => {
+    const r = await fetch("http://localhost:3000/api/openai/session");
+    const data = await r.json();
+    console.log("Ephermeral token:", data.client_secret.value);
+    store.dispatch(setEphermeralToken(data.client_secret.value));
+  };
+
   useEffect(() => {
     if (!meetingId) {
       navigate("/");
       return;
     }
+
+    // Create a ephermeral token
+    createEphermeralToken();
 
     // Setup video stream first
     navigator.mediaDevices
@@ -47,19 +71,20 @@ const MeetingPage: React.FC = () => {
         console.error("Remote video element not found!");
         return;
       }
-      
+
       try {
         remoteVideoRef.current.srcObject = event.streams[0];
         console.log("Remote video stream set successfully");
-        
+
         // Add event listeners to verify video is playing
         remoteVideoRef.current.onloadedmetadata = () => {
           console.log("Remote video metadata loaded");
-          remoteVideoRef.current?.play()
+          remoteVideoRef.current
+            ?.play()
             .then(() => console.log("Remote video playing"))
-            .catch(err => console.error("Error playing remote video:", err));
+            .catch((err) => console.error("Error playing remote video:", err));
         };
-        
+
         remoteVideoRef.current.onerror = (e) => {
           console.error("Remote video error:", e);
         };
@@ -83,19 +108,7 @@ const MeetingPage: React.FC = () => {
       console.error("Socket connection error:", error);
     });
 
-    const initializeConnection = async () => {
-      const response: any = await GetMeetingID(meetingId);
-      const data = JSON.parse(response.meetingRoom);
-
-      console.log("Meeting data:", data, "Host in browser:", hostNameInBrowser);
-      setHost(data.name);
-
-      if (data.name === hostNameInBrowser && !offer) {
-        createOffer(meetingId);
-      }
-    };
-
-    initializeConnection();
+    initializeConnection(meetingId);
 
     // Setup socket listeners
     socket.on("receive-offer", (data) => {
@@ -112,7 +125,7 @@ const MeetingPage: React.FC = () => {
     });
 
     socket.on("receive-ice-candidate", (data) => {
-    //   console.log("📨 ICE Candidate Received:", data.candidate);
+      //   console.log("📨 ICE Candidate Received:", data.candidate);
       receiveIceCandidate(data.candidate);
     });
 
@@ -149,13 +162,14 @@ const MeetingPage: React.FC = () => {
             You
           </div>
         </div>
-  
+
         {/* Remote video */}
         <div className="relative">
           <video
             ref={remoteVideoRef}
             autoPlay
             playsInline
+            muted
             className="w-full rounded-lg shadow-lg bg-gray-800"
           />
           <div className="absolute bottom-4 left-4 bg-black bg-opacity-50 text-white px-3 py-1 rounded-lg">
@@ -165,7 +179,6 @@ const MeetingPage: React.FC = () => {
       </div>
     </div>
   );
-
 };
 
 export default MeetingPage;

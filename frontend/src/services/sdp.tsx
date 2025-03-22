@@ -1,4 +1,6 @@
 import { socket } from './socket';
+import { store } from '../store/store';
+import { setRTCPeer } from '../features/rtcSlice';
 
 // Configuration for STUN servers
 const configuration = {
@@ -11,6 +13,7 @@ const configuration = {
 
 // Create peer connection with the configuration
 export const peer = new RTCPeerConnection(configuration);
+store.dispatch(setRTCPeer(peer));
 
 // Store ICE candidates until remote description is set
 let iceCandidatesQueue: RTCIceCandidate[] = [];

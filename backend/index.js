@@ -5,7 +5,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { client } from './src/services/redis.js';
 import meeting from "./src/routes/meeting_room.js";
-import { handleJoinMeeting, handleOffer, handleAnswer, handleIceCandidate } from './src/controllers/signaling_controller.js';
+import openai from "./src/routes/openai.js";
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -33,7 +33,7 @@ app.use(express.json());
 
 app.get('/', (req, res) => res.send('Hello World'));
 app.use("/api/meeting", meeting)
-
+app.use("/api/openai", openai)
 
 io.on("connection", (socket) => {
     console.log("🟢 User connected:", socket.id);
