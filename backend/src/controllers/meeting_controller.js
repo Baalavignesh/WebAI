@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import { redisMeetingRoom, redisGetMeetingRoom } from "../services/redis.js";
+import { insertNewMeetingDB } from "./dynamoDB_controller.js";
 
 const CreateMeetingRoom = async (req, res) => {
   try {
@@ -12,6 +13,8 @@ const CreateMeetingRoom = async (req, res) => {
     if (!result) {
       return res.status(500).json({ error: "Failed to create meeting room" });
     }
+    const dbInsert = await insertNewMeetingDB(meetingId, req.body.name);
+    console.info(`status of db insert ${dbInsert} `);
 
     res.json({ message: "Meeting room created successfully", meetingId });
   } catch (error) {

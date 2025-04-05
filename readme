@@ -1,0 +1,13 @@
+DynamoDB Local Installation:
+
+- Download DynamoDB Local from - https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBLocal.DownloadingAndRunning.html
+- Unzip
+- Run cmd : java -Djava.library.path=./DynamoDBLocal_lib -jar DynamoDBLocal.jar -sharedDb
+
+Path - /Users/sruthi/Downloads/Spring 2025/WebRTC/dynamodb-local/dynamodb_local_latest
+
+
+
+aws dynamodb describe-table --table-name TranscriptionStore  --endpoint-url http://localhost:8000
+
+aws dynamodb scan --table-name TranscriptionStore  --endpoint-url http://localhost:8000 --output table

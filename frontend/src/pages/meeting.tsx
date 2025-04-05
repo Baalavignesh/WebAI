@@ -31,6 +31,23 @@ const MeetingPage: React.FC = () => {
   const toggleTranscription = async () => {
     if (isTranscribing) {
       // Stop transcription
+      if (transcripts && transcripts.length > 0) {
+        try {
+          await fetch(`${import.meta.env.VITE_API_URL}/meeting/transcription`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              meetingId,
+              transcript: transcripts.join(" "), // Send just one at a time
+            }),
+          });
+        } catch (err) {
+          console.error("❌ Failed to send transcript to backend", err);
+        }
+      }
+
       await transcribeService.stopTranscription();
       setIsTranscribing(false);
     } else {
@@ -41,6 +58,8 @@ const MeetingPage: React.FC = () => {
           setTranscripts((prev) => [...prev, transcript]);
         }
       );
+      //send the data to the backend
+
       setIsTranscribing(success);
     }
   };

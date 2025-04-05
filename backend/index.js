@@ -6,10 +6,15 @@ import { Server } from 'socket.io';
 import { client } from './src/services/redis.js';
 import meeting from "./src/routes/meeting_room.js";
 import openai from "./src/routes/openai.js";
-import dotenv from 'dotenv';
-import { TranscribeStreamingClient, StartStreamTranscriptionCommand } from "@aws-sdk/client-transcribe-streaming";
+import dotenv from "dotenv";
+import { createTable } from "./src/services/awsDynamoDB.js";
+import {
+  TranscribeStreamingClient,
+  StartStreamTranscriptionCommand,
+} from "@aws-sdk/client-transcribe-streaming";
 
 dotenv.config();
+createTable();
 
 const app = express();
 const port = process.env.PORT || 3000;
