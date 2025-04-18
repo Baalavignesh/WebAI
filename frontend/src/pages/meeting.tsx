@@ -10,6 +10,7 @@ import {
 import { connectSocket, disconnectSocket, socket } from "../services/socket";
 import { GetMeetingID } from "../services/meeting";
 import { transcribeService } from "../services/transcribe";
+import { ChatBox, ChatBoxRef } from "../components/ChatBox";
 
 const MeetingPage: React.FC = () => {
   const navigate = useNavigate();
@@ -18,17 +19,71 @@ const MeetingPage: React.FC = () => {
   const [offer, setOffer] = useState<RTCSessionDescriptionInit | null>(null);
   const [transcripts, setTranscripts] = useState<string[]>([]);
   const [isTranscribing, setIsTranscribing] = useState<boolean>(false);
+  const [remoteTranscribing, setRemoteTranscribing] = useState<boolean>(false);
   const [peerConnected, setPeerConnected] = useState<boolean>(false);
   const [participants, setParticipants] = useState<string[]>([]);
+  const [isChatProcessing, setIsChatProcessing] = useState<boolean>(false);
   const reconnectTimerRef = useRef<number | null>(null);
   const isHost = useRef<boolean>(false);
+  const chatBoxRef = useRef<ChatBoxRef>(null);
+  const cleanupListenersRef = useRef<(() => void) | null>(null);
+  const transcriptionSaveTimerRef = useRef<number | null>(null);
 
   const hostNameInBrowser = localStorage.getItem("host");
 
   const videoRef = useRef<HTMLVideoElement>(null);
 
+  // Function to save transcripts to DynamoDB
+  const saveTranscriptsToDb = async () => {
+    if (!meetingId || transcripts.length === 0) return;
+
+    try {
+      console.log(`Saving ${transcripts.length} transcripts to DynamoDB for meeting ${meetingId}`);
+      await fetch(`${import.meta.env.VITE_API_URL}/meeting/transcription`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          meetingId,
+          transcript: transcripts.join(" "),
+        }),
+      }).then(response => {
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        return response.json();
+      }).then(data => {
+        console.log("✅ Transcripts saved to DynamoDB successfully:", data);
+      });
+    } catch (err) {
+      console.error("❌ Failed to save transcripts to DynamoDB", err);
+      // Retry once after a short delay if we hit an error
+      setTimeout(async () => {
+        try {
+          console.log("Retrying transcript save...");
+          await fetch(`${import.meta.env.VITE_API_URL}/meeting/transcription`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              meetingId,
+              transcript: transcripts.join(" "),
+            }),
+          });
+          console.log("✅ Retry successful");
+        } catch (retryErr) {
+          console.error("❌ Retry failed:", retryErr);
+        }
+      }, 1000);
+    }
+  };
+
   // Function to handle transcription toggle
   const toggleTranscription = async () => {
+    if (!meetingId) return;
+    
     if (isTranscribing) {
       // Stop transcription
       if (transcripts && transcripts.length > 0) {
@@ -48,6 +103,12 @@ const MeetingPage: React.FC = () => {
         }
       }
 
+      // Clear the periodic save timer if it exists
+      if (transcriptionSaveTimerRef.current) {
+        clearInterval(transcriptionSaveTimerRef.current);
+        transcriptionSaveTimerRef.current = null;
+      }
+
       await transcribeService.stopTranscription();
       setIsTranscribing(false);
     } else {
@@ -56,13 +117,50 @@ const MeetingPage: React.FC = () => {
         new MediaStream(), // Web Speech API doesn't need the media stream
         (transcript) => {
           setTranscripts((prev) => [...prev, transcript]);
-        }
+        },
+        meetingId
       );
-      //send the data to the backend
 
       setIsTranscribing(success);
+      
+      // Start periodic save timer if transcription started successfully
+      if (success) {
+        // Set up timer to save transcripts every 10 seconds
+        transcriptionSaveTimerRef.current = window.setInterval(() => {
+          saveTranscriptsToDb();
+        }, 10000); // 10 seconds
+      }
     }
   };
+
+  // Set up listeners for remote transcription events
+  useEffect(() => {
+    if (!meetingId) return;
+    
+    // Setup listeners for transcription from other users
+    const cleanup = transcribeService.setupTranscriptionListeners((transcript) => {
+      console.log("Received transcript from remote user:", transcript);
+      setTranscripts((prev) => [...prev, transcript]);
+    });
+    
+    // Store the cleanup function
+    cleanupListenersRef.current = cleanup;
+    
+    // Listen for transcription status updates
+    socket.on("transcription-status", (data) => {
+      console.log("Transcription status update:", data);
+      setRemoteTranscribing(data.isActive);
+    });
+    
+    return () => {
+      // Clean up transcription listeners
+      if (cleanupListenersRef.current) {
+        cleanupListenersRef.current();
+      }
+      
+      socket.off("transcription-status");
+    };
+  }, [meetingId]);
 
   // Initialize or reinitialize the connection
   const initializeConnection = async (meetingId: string) => {
@@ -88,12 +186,21 @@ const MeetingPage: React.FC = () => {
     }
   };
 
-  // const createEphermeralToken = async () => {
-  //   const r = await fetch("http://localhost:3000/api/openai/session");
-  //   const data = await r.json();
-  //   console.log("Ephermeral token:", data.client_secret.value);
-  //   store.dispatch(setEphermeralToken(data.client_secret.value));
-  // };
+  // No longer need this placeholder function as we're using the OpenAI assistant
+  // through the ChatBox component directly with useAssistant={true}
+  const handleSendChatMessage = async (message: string): Promise<void> => {
+    // This is now just a fallback in case we don't want to use the assistant
+    if (!meetingId) return;
+    
+    setIsChatProcessing(true);
+    
+    // Add a simple response
+    if (chatBoxRef.current) {
+      chatBoxRef.current.addBotMessage("This message is handled by the local handler, not the AI assistant.");
+    }
+    
+    setIsChatProcessing(false);
+  };
 
   // Handle reconnection attempts
   const handleReconnection = () => {
@@ -331,6 +438,12 @@ const MeetingPage: React.FC = () => {
         transcribeService.stopTranscription();
       }
       
+      // Clear transcript save timer
+      if (transcriptionSaveTimerRef.current) {
+        clearInterval(transcriptionSaveTimerRef.current);
+        transcriptionSaveTimerRef.current = null;
+      }
+      
       if (videoRef.current?.srcObject) {
         const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
         tracks.forEach((track) => track.stop());
@@ -356,77 +469,141 @@ const MeetingPage: React.FC = () => {
 
 
   return (
-    <div className="h-screen bg-custom-white p-8 overflow-y-auto">
-      <h1 className="text-3xl font-bold mb-6">Meeting - {meetingId}</h1>
-      <div className="grid grid-cols-2 gap-4">
-        {/* Local video */}
-        <div className="relative">
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className="w-full rounded-lg shadow-lg"
-          />
-          <div className="absolute bottom-4 left-4 bg-black bg-opacity-50 text-white px-3 py-1 rounded-lg">
-            You {isHost.current ? "(Host)" : ""}
+    <div className="min-h-screen bg-slate-50 py-6 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-7xl mx-auto">
+        {/* Header */}
+        <div className="border-b border-gray-200 pb-4 mb-6 flex justify-between items-center">
+          <div>
+            <h2 className="text-lg font-medium text-gray-900">
+              Meeting hosted by {host}
+            </h2>
+            <div className="text-sm text-gray-500 flex items-center">
+              <span>ID: {meetingId}</span>
+              <button
+                onClick={() => navigator.clipboard.writeText(meetingId || '')}
+                className="ml-2 text-gray-400 hover:text-gray-600"
+                title="Copy meeting ID"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="flex items-center text-sm mt-1">
+              <div className={`w-2 h-2 rounded-full mr-2 ${peerConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
+              <span className="text-gray-600">
+                {peerConnected ? 'Connected' : 'Not connected'} · {participants.length} participant(s)
+              </span>
+              {remoteTranscribing && !isTranscribing && (
+                <span className="ml-3 px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800">
+                  Remote transcription active
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="flex space-x-2">
+            {isHost.current && (
+              <button 
+                onClick={toggleTranscription}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium ${
+                  isTranscribing 
+                    ? 'bg-red-100 text-red-700 hover:bg-red-200' 
+                    : 'bg-green-100 text-green-700 hover:bg-green-200'
+                }`}
+              >
+                {isTranscribing ? 'Stop Transcription' : 'Start Transcription'}
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Remote video */}
-        <div className="relative">
-          <video
-            ref={remoteVideoRef}
-            autoPlay
-            playsInline
-            muted
-            className="w-full rounded-lg shadow-lg bg-gray-800"
-            onPlay={() => console.log("Remote video started playing")}
-          />
-          <div className="absolute bottom-4 left-4 bg-black bg-opacity-50 text-white px-3 py-1 rounded-lg">
-            Remote User
-          </div>
-          {!remoteVideoRef.current?.srcObject && (
-            <div className="absolute inset-0 flex items-center justify-center text-white bg-black bg-opacity-50">
-              Waiting for remote user...
+        {/* Main content */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Video section - takes 2/3 on large screens */}
+          <div className="lg:col-span-2 space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Local video */}
+              <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                <div className="relative aspect-video">
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute bottom-3 left-3 bg-black/70 text-white px-2 py-1 text-sm rounded">
+                    You {isHost.current ? "(Host)" : ""}
+                  </div>
+                </div>
+              </div>
+
+              {/* Remote video */}
+              <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                <div className="relative aspect-video bg-gray-800">
+                  <video
+                    ref={remoteVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute bottom-3 left-3 bg-black/70 text-white px-2 py-1 text-sm rounded">
+                    Remote User
+                  </div>
+                  {!remoteVideoRef.current?.srcObject && (
+                    <div className="absolute inset-0 flex items-center justify-center text-white bg-black/50 text-sm">
+                      Waiting for remote user...
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
-          )}
-        </div>
-      </div>
-      
-      {/* Connection Status */}
-      <div className="mt-4 mb-2 flex items-center">
-        <span className={`inline-block px-3 py-1 rounded-full text-sm ${peerConnected ? 'bg-green-500' : 'bg-red-500'} text-white`}>
-          {peerConnected ? 'Connected to peer' : 'Not connected to peer'}
-        </span>
-        <span className="ml-2 text-sm text-gray-600">
-          {participants.length} participant(s) in the meeting
-        </span>
-      </div>
-      
-      {/* Transcription Area */}
-      <div className="mt-2">
-        <div className="flex justify-between items-center mb-2">
-          <h2 className="text-xl font-semibold">Live Transcription</h2>
-          {
-            isHost.current && (
-              <button 
-                onClick={toggleTranscription}
-            className={`px-4 py-2 rounded-lg ${isTranscribing ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'} text-white`}
-          >
-                {isTranscribing ? 'Stop Transcription' : 'Start Transcription'}
-              </button>
-            )
-          }
-        </div>
-        <div className="bg-gray-100 p-4 rounded-lg h-48 overflow-y-auto">
-          {transcripts.length > 0 ? (
-            transcripts.map((text, index) => (
-              <p key={index} className="mb-2">{text}</p>
-            ))
-          ) : (
-            <p className="text-gray-500">Transcription will appear here...</p>
-          )}
+
+            {/* Transcription box */}
+            <div className="bg-white rounded-lg shadow-sm p-4">
+              <div className="flex justify-between items-center mb-3">
+                <h3 className="font-medium text-gray-900">Live Transcription</h3>
+              </div>
+              <div className="bg-gray-50 rounded border border-gray-200 p-3 h-64 overflow-y-auto">
+                {transcripts.length > 0 ? (
+                  transcripts.map((text, index) => (
+                    <p key={index} className="mb-2 text-gray-700 text-sm">{text}</p>
+                  ))
+                ) : (
+                  <p className="text-gray-500 text-sm">
+                    {isHost.current 
+                      ? "Click 'Start Transcription' to begin..." 
+                      : "Waiting for host to start transcription..."}
+                  </p>
+                )}
+              </div>
+              {!isHost.current && (
+                <div className="mt-2 text-xs text-gray-500 italic">
+                  <p>Only the host can start or stop transcription. All participants see the transcriptions.</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Chat section with AI Assistant */}
+          <div className="lg:col-span-1">
+            <div className="bg-white rounded-lg shadow-sm h-full">
+              <h3 className="font-medium text-gray-900 p-4 border-b border-gray-200">
+                AI Assistant
+                <span className="text-xs ml-2 text-gray-500">Ask questions about the meeting</span>
+              </h3>
+              <div className="h-[calc(100%-56px)]"> {/* Adjust for header height */}
+                <ChatBox 
+                  ref={chatBoxRef}
+                  meetingId={meetingId}
+                  useAssistant={true}
+                  isProcessing={isChatProcessing}
+                />
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

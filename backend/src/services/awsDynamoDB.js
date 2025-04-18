@@ -2,6 +2,10 @@ import AWS from "aws-sdk";
 import dotenv from "dotenv";
 dotenv.config();
 
+// Logging for debugging
+console.log("DynamoDB Endpoint:", process.env.DYNAMO_DB_ENDPOINT || "http://localhost:8000");
+console.log("AWS Region:", process.env.AWS_REGION || "us-east-2");
+
 const docClient = new AWS.DynamoDB.DocumentClient({
   region: process.env.AWS_REGION || "us-east-2",
   endpoint: process.env.DYNAMO_DB_ENDPOINT || "http://localhost:8000",
@@ -62,4 +66,4 @@ const createTable = async () => {
   }
 };
 
-export { docClient, createTable };
+export { docClient, createTable, dynamodb };

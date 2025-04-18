@@ -59,6 +59,7 @@ export class TranscribeService {
   private isTranscribing: boolean = false;
   private onTranscriptCallback: ((transcript: string) => void) | null = null;
   private mediaStream: MediaStream | null = null;
+  private currentMeetingId: string | null = null;
 
   constructor() {
     console.log("Initializing TranscribeService with Web Speech API");
@@ -74,10 +75,12 @@ export class TranscribeService {
    * Start transcription with the provided audio stream
    * @param stream The media stream (used for microphone access permission)
    * @param onTranscript Callback function to receive transcripts
+   * @param meetingId The current meeting ID for broadcasting
    */
   async startTranscription(
     stream: MediaStream,
-    onTranscript: (transcript: string) => void
+    onTranscript: (transcript: string) => void,
+    meetingId: string
   ): Promise<boolean> {
     console.log("Starting Web Speech API transcription");
     
@@ -87,6 +90,9 @@ export class TranscribeService {
         return false;
       }
 
+      // Store the meeting ID for broadcasting
+      this.currentMeetingId = meetingId;
+      
       // Store the callback
       this.onTranscriptCallback = onTranscript;
       
@@ -114,17 +120,29 @@ export class TranscribeService {
         this.isTranscribing = true;
         
         // Emit a socket event to let others know transcription started
-        // This is optional and depends on your app's needs
-        socket.emit("client-transcription-status", { active: true });
+        socket.emit("transcription-started", { 
+          meetingId: this.currentMeetingId 
+        });
       };
       
       this.recognition.onresult = (event: SpeechRecognitionEvent) => {
         console.log("Speech recognition result received", event);
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const transcript = event.results[i][0].transcript;
-          if (event.results[i].isFinal && this.onTranscriptCallback) {
+          if (event.results[i].isFinal && this.onTranscriptCallback && this.currentMeetingId) {
             console.log("Final transcript:", transcript);
+            
+            // Call the local callback
             this.onTranscriptCallback(transcript);
+            
+            // Broadcast to all users in the meeting
+            socket.emit("broadcast-transcription", {
+              meetingId: this.currentMeetingId,
+              transcript
+            });
+            
+            // Log to ensure data is being sent correctly
+            console.log(`Sent transcript "${transcript.substring(0, 30)}${transcript.length > 30 ? '...' : ''}" to backend for meeting ${this.currentMeetingId}`);
           }
         }
       };
@@ -167,15 +185,40 @@ export class TranscribeService {
       }
       
       this.isTranscribing = false;
-      this.onTranscriptCallback = null;
       
-      // Optional: notify others that transcription has stopped
-      socket.emit("client-transcription-status", { active: false });
+      // Notify others that transcription has stopped
+      if (this.currentMeetingId) {
+        socket.emit("transcription-stopped", { 
+          meetingId: this.currentMeetingId 
+        });
+        this.currentMeetingId = null;
+      }
+      
+      this.onTranscriptCallback = null;
       
       console.log("Transcription stopped successfully");
     } catch (error) {
       console.error("Error stopping transcription:", error);
     }
+  }
+
+  /**
+   * Set up listeners for transcription events from other users
+   * @param onRemoteTranscript Callback to handle transcripts from other users
+   */
+  setupTranscriptionListeners(onRemoteTranscript: (transcript: string) => void): () => void {
+    // Listen for transcripts from other users
+    socket.on("receive-transcription", (data) => {
+      console.log("Received transcription from another user:", data);
+      if (data && data.transcript) {
+        onRemoteTranscript(data.transcript);
+      }
+    });
+    
+    // Return a cleanup function to remove listeners
+    return () => {
+      socket.off("receive-transcription");
+    };
   }
 
   /**
